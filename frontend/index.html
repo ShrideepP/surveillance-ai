@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SurveillanceAI — Real-Time Threat Detection</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <!-- HEADER -->
+    <header class="header">
+      <div class="header-left">
+        <div class="logo-mark">
+          <span class="logo-icon">◈</span>
+          <span class="logo-text">SURVEILLANCE<em>AI</em></span>
+        </div>
+        <div class="header-meta">
+          <span id="clock" class="clock">00:00:00</span>
+          <span class="sep">|</span>
+          <span id="date-display" class="date-display"></span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="stat-chip">
+          <span class="chip-val" id="stat-total">0</span>
+          <span class="chip-label">ALERTS</span>
+        </div>
+        <div class="stat-chip high">
+          <span class="chip-val" id="stat-high">0</span>
+          <span class="chip-label">HIGH</span>
+        </div>
+        <div class="stat-chip medium">
+          <span class="chip-val" id="stat-med">0</span>
+          <span class="chip-label">MED</span>
+        </div>
+        <div class="status-pill" id="status-pill">
+          <span class="pulse-dot"></span>
+          <span id="status-text">OFFLINE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN LAYOUT -->
+    <main class="layout">
+      <!-- LEFT: Video Feed -->
+      <section class="feed-section">
+        <div class="section-label">LIVE FEED</div>
+
+        <div class="controls">
+          <button
+            class="btn btn-primary"
+            id="btn-webcam"
+            onclick="startWebcam()"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M20.94 11A9 9 0 1 1 12 3" />
+            </svg>
+            WEBCAM
+          </button>
+          <label class="btn btn-secondary" for="videoUpload">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+              />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            VIDEO FILE
+          </label>
+          <input
+            type="file"
+            id="videoUpload"
+            accept="video/*"
+            onchange="loadVideoFile(event)"
+            hidden
+          />
+          <button
+            class="btn btn-danger"
+            id="btn-stop"
+            onclick="stopStream()"
+            disabled
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" />
+            </svg>
+            STOP
+          </button>
+          <button class="btn btn-ghost" onclick="clearAlerts()">
+            CLEAR LOG
+          </button>
+        </div>
+
+        <!-- Video container -->
+        <div class="video-container" id="video-container">
+          <!-- Idle state -->
+          <div class="video-idle" id="video-idle">
+            <div class="idle-icon">◈</div>
+            <div class="idle-text">
+              Select webcam or upload a video file to begin
+            </div>
+          </div>
+
+          <!-- Raw video — shown while WebSocket opens, hidden once processed feed starts -->
+          <video
+            id="raw-video"
+            autoplay
+            muted
+            playsinline
+            style="display: none"
+          ></video>
+
+          <!-- Hidden capture canvas — never shown, used only for frame extraction -->
+          <canvas id="hidden-canvas" style="display: none"></canvas>
+
+          <!--
+          KEY FIX: processed-feed is now a <canvas>, not an <img>.
+          Drawing to canvas via ctx.drawImage() does not trigger a DOM layout
+          repaint, eliminating flicker. It stays hidden until the first
+          annotated frame arrives from the backend.
+        -->
+          <canvas
+            id="processed-feed"
+            style="
+              display: none;
+              width: 100%;
+              height: 100%;
+              object-fit: contain;
+            "
+          ></canvas>
+
+          <!-- Corner frame overlay + REC badge -->
+          <div class="feed-overlay" id="feed-overlay" style="display: none">
+            <div class="overlay-corner tl"></div>
+            <div class="overlay-corner tr"></div>
+            <div class="overlay-corner bl"></div>
+            <div class="overlay-corner br"></div>
+            <div class="rec-badge" id="rec-badge">
+              <span class="rec-dot"></span>REC
+            </div>
+          </div>
+
+          <!-- Red border flash on threat -->
+          <div class="threat-flash" id="threat-flash"></div>
+        </div>
+
+        <!-- Detection tags strip -->
+        <div class="detection-strip" id="detection-strip">
+          <span class="strip-label">DETECTIONS:</span>
+          <span class="strip-empty" id="strip-empty">none</span>
+          <div class="strip-tags" id="strip-tags"></div>
+        </div>
+      </section>
+
+      <!-- RIGHT: Alert Log -->
+      <section class="alert-section">
+        <div class="section-label">
+          ALERT LOG
+          <span class="alert-count-badge" id="alert-count-badge">0</span>
+        </div>
+        <div class="alert-list" id="alert-list">
+          <div class="alert-empty" id="alert-empty">
+            <div class="empty-icon">◎</div>
+            <div>No alerts yet</div>
+            <div class="empty-sub">System monitoring in standby</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- SNAPSHOT MODAL -->
+    <div class="modal-backdrop" id="modal-backdrop" onclick="closeModal()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span>SNAPSHOT</span>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <img class="modal-img" id="modal-img" src="" alt="Alert snapshot" />
+        <div class="modal-meta" id="modal-meta"></div>
+      </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

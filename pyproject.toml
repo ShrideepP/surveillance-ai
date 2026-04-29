@@ -1,0 +1,20 @@
+[project]
+name = "surveillance-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "deepface>=0.0.99",
+    "fastapi>=0.136.1",
+    "kaggle>=2.1.0",
+    "numpy>=2.4.4",
+    "opencv-python-headless>=4.13.0.92",
+    "pillow>=12.2.0",
+    "python-multipart>=0.0.27",
+    "tensorflow>=2.21.0",
+    "tf-keras>=2.21.0",
+    "ultralytics>=8.4.43",
+    "uvicorn>=0.46.0",
+    "websockets>=16.0",
+]
