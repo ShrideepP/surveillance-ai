@@ -8,15 +8,30 @@ ALERTS_DIR = Path("data/alerts")
 ALERTS_DIR.mkdir(parents=True, exist_ok=True)
 
 alerts_log: list[dict] = []
+
 _last_alert_time: float = 0.0
-ALERT_THROTTLE_SECONDS = 3.0
+_last_face_alert_time: float = 0.0
+
+ALERT_THROTTLE_SECONDS      = 3.0
+FACE_ALERT_THROTTLE_SECONDS = 5.0   # slightly longer — face checks run every frame
 
 
 def should_trigger_alert() -> bool:
+    """Throttle gate for weapon/aggression alerts."""
     global _last_alert_time
     now = time.time()
     if now - _last_alert_time >= ALERT_THROTTLE_SECONDS:
         _last_alert_time = now
+        return True
+    return False
+
+
+def should_trigger_face_alert() -> bool:
+    """Separate throttle gate for face-match alerts."""
+    global _last_face_alert_time
+    now = time.time()
+    if now - _last_face_alert_time >= FACE_ALERT_THROTTLE_SECONDS:
+        _last_face_alert_time = now
         return True
     return False
 
@@ -30,7 +45,6 @@ def save_alert(
     timestamp = datetime.now()
     ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")
 
-    # Save snapshot to disk
     img_filename = f"alert_{ts_str}.jpg"
     img_path = ALERTS_DIR / img_filename
     img_bytes = base64.b64decode(frame_b64)
@@ -38,8 +52,7 @@ def save_alert(
         f.write(img_bytes)
 
     suspicious_detections = [d for d in detections if d.get("suspicious")]
-
-    severity = _compute_severity(suspicious_detections)
+    severity = _compute_severity(suspicious_detections, face_match)
 
     alert = {
         "id": ts_str,
@@ -50,14 +63,18 @@ def save_alert(
         "severity": severity,
     }
     alerts_log.append(alert)
+    print(f"[AlertManager] Saved alert {ts_str} | severity={severity} | "
+          f"detections={len(suspicious_detections)} | face={face_match and face_match['name']}")
     return alert
 
 
-def _compute_severity(detections: list) -> str:
+def _compute_severity(detections: list, face_match: Optional[dict] = None) -> str:
     labels = [d.get("label", "").lower() for d in detections]
     high_risk = {"gun", "pistol", "rifle", "weapon", "knife", "blade"}
     if any(label in high_risk for label in labels):
         return "HIGH"
+    if face_match:
+        return "HIGH"   # known criminal = always HIGH regardless of weapon
     if len(detections) >= 2:
         return "MEDIUM"
     return "LOW"

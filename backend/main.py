@@ -13,16 +13,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from detector import SurveillanceDetector
-from alert_manager import save_alert, get_alerts, get_stats, should_trigger_alert
-from face_recognizer import recognize_faces, is_available as face_recog_available, seed_demo_db
+from alert_manager import save_alert, get_alerts, get_stats, should_trigger_alert, should_trigger_face_alert
+from face_recognizer import recognize_faces, is_available as face_recog_available, seed_demo_db, build_db
 
-# ---------------------------------------------------------------------------
-# One shared thread pool for all blocking inference calls.
-# max_workers=1 intentionally — YOLO is not thread-safe across concurrent
-# calls and a single worker serialises frames without contention.
-# ---------------------------------------------------------------------------
 _inference_pool = ThreadPoolExecutor(max_workers=1)
-
 detector: SurveillanceDetector = None
 
 
@@ -33,6 +27,7 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     detector = await loop.run_in_executor(_inference_pool, SurveillanceDetector)
     seed_demo_db()
+    build_db()          # ← was missing; populates _db before any frame arrives
     print("[Main] Ready.")
     yield
     _inference_pool.shutdown(wait=False)
@@ -59,24 +54,17 @@ app.mount("/static",    StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 app.mount("/snapshots", StaticFiles(directory=str(ALERTS_DIR)),   name="snapshots")
 
 
-# ---------------------------------------------------------------------------
-# HTTP routes
-# ---------------------------------------------------------------------------
-
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text())
-
 
 @app.get("/api/alerts")
 async def alerts_endpoint():
     return JSONResponse(get_alerts())
 
-
 @app.get("/api/stats")
 async def stats_endpoint():
     return JSONResponse({**get_stats(), "face_recog_enabled": face_recog_available()})
-
 
 @app.post("/api/upload-video")
 async def upload_video(file: UploadFile = File(...)):
@@ -87,7 +75,6 @@ async def upload_video(file: UploadFile = File(...)):
     (VIDEOS_DIR / file.filename).write_bytes(contents)
     return JSONResponse({"filename": file.filename, "size": len(contents)})
 
-
 @app.delete("/api/alerts")
 async def clear_alerts():
     from alert_manager import alerts_log
@@ -95,15 +82,10 @@ async def clear_alerts():
     return JSONResponse({"cleared": True})
 
 
-# ---------------------------------------------------------------------------
-# Blocking inference — runs inside the thread pool, never on the event loop.
-# ---------------------------------------------------------------------------
-
 def _run_inference(frame: np.ndarray, base_url: str) -> dict:
+    # ── Path A: weapon / aggression detection ──────────────────────────────
     result = detector.detect(frame)
 
-    # Aggression only checked when no weapon found — avoids running two
-    # full YOLO passes on every frame.
     if not result["alert"]:
         try:
             if detector.detect_aggression(frame):
@@ -117,9 +99,8 @@ def _run_inference(frame: np.ndarray, base_url: str) -> dict:
         except Exception as exc:
             print(f"[Aggression] {exc}")
 
-    # Face recognition + alert saving share the same throttle gate so they
-    # only run together at most once every 3 seconds.
     if result["alert"] and should_trigger_alert():
+        # Face recog runs here too when a weapon is present
         face_match = None
         if face_recog_available():
             try:
@@ -129,12 +110,33 @@ def _run_inference(frame: np.ndarray, base_url: str) -> dict:
         alert = save_alert(result["frame"], result["detections"], face_match, base_url)
         result["alert_data"] = alert
 
+    # ── Path B: face-only alert (independent of weapon detection) ──────────
+    # Runs on every frame regardless of weapon/aggression result.
+    # Has its own throttle so it doesn't consume the weapon-alert slot.
+    if face_recog_available():
+        try:
+            face_match = recognize_faces(frame)
+            if face_match and should_trigger_face_alert():
+                print(f"[Main] Face alert triggered: {face_match['name']}")
+                # Synthesise a face-match detection entry for the alert log
+                face_detection = [{
+                    "label": f"face:{face_match['name']}",
+                    "confidence": face_match["confidence"],
+                    "suspicious": True,
+                    "bbox": [],
+                }]
+                alert = save_alert(
+                    result["frame"], face_detection, face_match, base_url
+                )
+                # Surface alert to frontend even if no weapon was detected
+                result["alert"] = True
+                result["alert_data"] = alert
+                result["detections"].extend(face_detection)
+        except Exception as exc:
+            print(f"[FaceRecog/PathB] {exc}")
+
     return result
 
-
-# ---------------------------------------------------------------------------
-# WebSocket
-# ---------------------------------------------------------------------------
 
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
@@ -163,7 +165,6 @@ async def websocket_stream(websocket: WebSocket):
             if not frame_b64:
                 continue
 
-            # Frame decode is fast — stays on event loop
             try:
                 img_bytes = base64.b64decode(frame_b64)
                 np_arr    = np.frombuffer(img_bytes, np.uint8)
@@ -175,8 +176,6 @@ async def websocket_stream(websocket: WebSocket):
             if frame is None:
                 continue
 
-            # Inference is slow — offload to thread pool.
-            # Event loop is free while this awaits.
             result = await loop.run_in_executor(
                 _inference_pool, _run_inference, frame, base_url
             )
