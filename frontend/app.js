@@ -15,9 +15,9 @@ const _offscreen = new Image();
 let _pendingFrame = null; // latest b64 frame waiting to be drawn
 let _drawScheduled = false;
 
-const HOST = location.host;
-const WS_PROTOCOL = location.protocol === "https:" ? "wss" : "ws";
-const WS_URL = `${WS_PROTOCOL}://${HOST}/ws/stream`;
+const WS_HOST = window.location.host;
+const WS_PROTOCOL = window.location.protocol === "https:" ? "wss" : "ws";
+const ws = new WebSocket(`${WS_PROTOCOL}://${WS_HOST}/ws/stream`);
 
 // ── DOM helpers ───────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
